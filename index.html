@@ -1742,6 +1742,8 @@ let restVibrateTimer = null;
 let restNotifyTimer = null;
 let restAlarmTimeout = null;
 let restBeepNodes = [];
+let restRumbleNodes = [];
+let restRumbleAudio = null;
 let restSW = null;
 let restVolume = (function(){
   try{
@@ -1779,6 +1781,58 @@ function stopBeepNodes(){
     try{ node.disconnect(); }catch(e){}
   });
   restBeepNodes = [];
+}
+function getRestRumbleAudio(){
+  if(restRumbleAudio) return restRumbleAudio;
+  restRumbleAudio = new Audio('./rumble.wav');
+  restRumbleAudio.loop = true;
+  restRumbleAudio.preload = 'auto';
+  return restRumbleAudio;
+}
+function stopRestRumble(){
+  restRumbleNodes.forEach(node => {
+    try{ node.stop(); }catch(e){}
+    try{ node.disconnect(); }catch(e){}
+  });
+  restRumbleNodes = [];
+  if(restRumbleAudio){
+    try{ restRumbleAudio.pause(); restRumbleAudio.currentTime = 0; }catch(e){}
+  }
+}
+function startRestRumble(){
+  const ctx = getRestAudioCtx();
+  if(ctx){
+    if(ctx.state === 'suspended') ctx.resume().catch(()=>{});
+    try{
+      stopRestRumble();
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const osc3 = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc1.type = 'square';
+      osc1.frequency.value = 52;
+      osc2.type = 'sine';
+      osc2.frequency.value = 78;
+      osc3.type = 'sine';
+      osc3.frequency.value = 39;
+      const level = 0.28 + 0.22 * Math.max(0.35, restVolume);
+      g.gain.setValueAtTime(level, ctx.currentTime);
+      osc1.connect(g);
+      osc2.connect(g);
+      osc3.connect(g);
+      g.connect(ctx.destination);
+      osc1.start();
+      osc2.start();
+      osc3.start();
+      restRumbleNodes = [osc1, osc2, osc3, g];
+    }catch(e){}
+  }
+  try{
+    const a = getRestRumbleAudio();
+    a.volume = Math.max(0.45, restVolume);
+    a.currentTime = 0;
+    a.play().catch(()=>{});
+  }catch(e){}
 }
 function playRestBeepOnce(){
   if(restVolume <= 0) return;
@@ -1845,6 +1899,11 @@ function unlockRestHaptics(){
   if(navigator.vibrate){
     try{ navigator.vibrate(20); }catch(e){}
   }
+  try{
+    const a = getRestRumbleAudio();
+    a.volume = 0.01;
+    a.play().then(()=>{ a.pause(); a.currentTime = 0; }).catch(()=>{});
+  }catch(e){}
   ensureRestNotifyPermission();
   registerRestSW();
 }
@@ -1858,7 +1917,7 @@ function ensureRestNotifyPermission(){
 function registerRestSW(){
   if(!('serviceWorker' in navigator)) return Promise.resolve(null);
   if(restSW) return Promise.resolve(restSW);
-  return navigator.serviceWorker.register('./sw.js?v=4').then(() => navigator.serviceWorker.ready).then(reg => {
+  return navigator.serviceWorker.register('./sw.js?v=5').then(() => navigator.serviceWorker.ready).then(reg => {
     restSW = reg;
     return reg;
   }).catch(()=>null);
@@ -1928,14 +1987,11 @@ function playRestHapticRumble(){
 function startRestAlarm(){
   stopRestAlarm(true);
   playRestBeepOnce();
-  playRestHapticRumble();
+  startRestRumble();
   pulseRestVibrate();
   showRestDoneNotification();
   postRestSW('rest-alarm-start', {title: 'Descanso concluído'});
-  restBeepTimer = setInterval(() => {
-    playRestBeepOnce();
-    playRestHapticRumble();
-  }, 850);
+  restBeepTimer = setInterval(playRestBeepOnce, 850);
   restVibrateTimer = setInterval(() => {
     if(!document.hidden) pulseRestVibrate();
   }, 1600);
@@ -1956,6 +2012,7 @@ function stopRestAlarm(keepSchedule){
   }
   clearRestNotifications();
   stopBeepNodes();
+  stopRestRumble();
   if(navigator.vibrate){
     try{ navigator.vibrate(0); }catch(e){}
   }
